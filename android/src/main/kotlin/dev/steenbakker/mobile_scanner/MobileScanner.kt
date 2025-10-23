@@ -23,9 +23,13 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraXConfig
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ExperimentalLensFacing
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.MeteringPoint
+import androidx.camera.core.MeteringPointFactory
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.core.SurfaceRequest
 import androidx.camera.core.TorchState
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -345,6 +349,7 @@ class MobileScanner(
         detectionTimeout: Long,
         cameraResolutionWanted: Size?,
         invertImage: Boolean,
+        initialZoom: Double?,
     ) {
         this.detectionSpeed = detectionSpeed
         this.detectionTimeout = detectionTimeout
@@ -361,7 +366,7 @@ class MobileScanner(
 //                  MobileScannerStartParameters(
 //                    if (portrait) width else height,
 //                    if (portrait) height else width,
-//                    deviceOrientationListener.getUIOrientation().serialize(),
+//                    deviceOrientationListener.getOrientation().serialize(),
 //                    sensorRotationDegrees,
 //                    surfaceProducer!!.handlesCropAndRotation(),
 //                    currentTorchState,
@@ -483,11 +488,25 @@ class MobileScanner(
                         zoomScaleStateCallback(state.linearZoom.toDouble())
                     }
 
-                    // Enable torch if provided
-                    if (it.cameraInfo.hasFlashUnit()) {
-                        it.cameraControl.enableTorch(torch)
+                // Enable torch if provided
+                if (it.cameraInfo.hasFlashUnit()) {
+                    it.cameraControl.enableTorch(torch)
+                }
+
+                if (initialZoom != null) {
+                    try {
+                        if (initialZoom in 0.0..1.0) {
+                            it.cameraControl.setLinearZoom(initialZoom.toFloat())
+                        } else {
+                            it.cameraControl.setZoomRatio(initialZoom.toFloat())
+                        }
+                    } catch (e: Exception) {
+                        mobileScannerErrorCallback(ZoomNotInRange())
+
+                        return@addListener
                     }
                 }
+            }
 
                 val resolution = analysis.resolutionInfo!!.resolution
                 val width = resolution.width.toDouble()
@@ -513,7 +532,7 @@ class MobileScanner(
                     MobileScannerStartParameters(
                         if (portrait) width else height,
                         if (portrait) height else width,
-                        deviceOrientationListener.getUIOrientation().serialize(),
+                        deviceOrientationListener.getOrientation().serialize(),
                         sensorRotationDegrees,
                         surfaceProducer!!.handlesCropAndRotation(),
                         currentTorchState,
@@ -734,6 +753,23 @@ class MobileScanner(
     fun resetScale() {
         if (camera == null) throw ZoomWhenStopped()
         camera?.cameraControl?.setZoomRatio(1f)
+    }
+
+    fun setFocus(x: Float, y: Float) {
+        val cam = camera ?: throw ZoomWhenStopped()
+
+        // Ensure x,y are normalized (0f..1f)
+        if (x !in 0f..1f || y !in 0f..1f) {
+            throw IllegalArgumentException("Focus coordinates must be between 0.0 and 1.0")
+        }
+
+        val factory: MeteringPointFactory = SurfaceOrientedMeteringPointFactory(1f, 1f)
+        val afPoint: MeteringPoint = factory.createPoint(x, y)
+
+        val action = FocusMeteringAction.Builder(afPoint, FocusMeteringAction.FLAG_AF)
+            .build()
+
+        cam.cameraControl.startFocusAndMetering(action)
     }
 
     /**
